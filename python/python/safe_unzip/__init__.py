@@ -37,6 +37,8 @@ Async usage:
     )
 """
 
+from __future__ import annotations
+
 import asyncio
 from os import PathLike
 from pathlib import Path

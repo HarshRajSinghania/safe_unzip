@@ -4,6 +4,8 @@ These tests verify that the Python bindings have identical security
 guarantees to the Rust implementation.
 """
 
+from __future__ import annotations
+
 import io
 import gzip
 import os
