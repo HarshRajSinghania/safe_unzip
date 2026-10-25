@@ -3,6 +3,7 @@
 //! The driver orchestrates extraction using adapters (format-specific) and
 //! policies (security checks).
 
+#[cfg(feature = "sevenz")]
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek};
