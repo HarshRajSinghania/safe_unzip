@@ -1,12 +1,13 @@
 [package]
 name = "safe_unzip"
-version = "0.1.6"
+version = "0.2.0"
 edition = "2021"
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/tenuo-ai/safe_unzip"
 homepage = "https://tenuo.dev"
 authors = ["Niki A. <dev@tenuo.dev>"]
-description = "Secure zip extraction. Prevents Zip Slip and Zip Bombs."
+description = "Secure archive extraction for ZIP, TAR, and 7z with traversal and resource-limit protection."
 keywords = ["zip", "security", "archive", "extraction", "safe"]
 categories = ["filesystem", "compression"]
 

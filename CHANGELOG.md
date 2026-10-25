@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-25
+
 ### Added
 
 - **Junk paths** ([#4](https://github.com/tenuo-ai/safe_unzip/issues/4)): extract
@@ -25,6 +27,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Updated `tar` to 0.4.46 to address GHSA-3pv8-6f4r-ffg2.
 - Updated `zip` to 9.1 to address RUSTSEC-2026-0367,
   RUSTSEC-2026-0368, and RUSTSEC-2026-0369.
 - Updated `tokio` to 1.54.1 to address RUSTSEC-2026-0386.
@@ -56,6 +59,13 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Release artifacts now include CPython 3.8+ ABI3 wheels, manylinux2014 Linux
+  wheels, both Intel and Apple Silicon macOS wheels, and the source distribution.
+- Release publishing now validates tag, manifest, module, and changelog versions,
+  fails on registry errors, and publishes generated release notes reliably.
+- Added the declared MIT and Apache-2.0 license texts to published packages.
+- Documented and CI-tested Rust 1.88 as the core MSRV and Rust 1.93 when the
+  `sevenz` feature is enabled.
 - **7z backend switched to `sevenz-rust2`** ([#2](https://github.com/tenuo-ai/safe_unzip/issues/2)).
   `sevenz-rust` is unmaintained and its repository is gone. `sevenz-rust2`
   is built read-only (no encoder, no AES). It requires Rust 1.93+ when the

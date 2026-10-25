@@ -75,6 +75,24 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+  msrv:
+    name: Minimum supported Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88
+
+      - name: Check core features on Rust 1.88
+        run: cargo +1.88.0 check --locked --features tar,async,cli
+
+      - name: Install Rust 1.93
+        uses: dtolnay/rust-toolchain@1.93
+
+      - name: Check 7z on Rust 1.93
+        run: cargo +1.93.0 check --locked --features sevenz
+
   audit:
     name: Security Audit
     runs-on: ubuntu-latest
@@ -98,7 +116,7 @@ jobs:
           - ubuntu-latest        # Linux x86_64
           - macos-latest         # macOS arm64 (Apple Silicon)
           - windows-latest       # Windows x86_64
-        python-version: ['3.9', '3.x']  # min supported + latest (3.14)
+        python-version: ['3.8', '3.x']  # min supported + latest
     
     steps:
       - uses: actions/checkout@v4
@@ -128,4 +146,3 @@ jobs:
       
       - name: Run Python tests
         run: cd python && pytest tests/ -v
-
