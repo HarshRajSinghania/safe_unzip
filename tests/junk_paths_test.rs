@@ -223,6 +223,41 @@ fn extractor_still_rejects_traversal() {
     assert!(listing(dest.path()).is_empty());
 }
 
+#[cfg(unix)]
+#[test]
+fn junk_paths_rejects_flattened_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    let zip = make_zip(&[("good.txt", b"good"), ("nested/link", b"pwned")]);
+    let outside = tempdir().unwrap();
+    let target = outside.path().join("target.txt");
+    std::fs::write(&target, b"sensitive").unwrap();
+
+    let extractor_dest = tempdir().unwrap();
+    symlink(&target, extractor_dest.path().join("link")).unwrap();
+    let result = Extractor::new(extractor_dest.path())
+        .unwrap()
+        .junk_paths(true)
+        .overwrite(OverwritePolicy::Overwrite)
+        .mode(ExtractionMode::ValidateFirst)
+        .extract(Cursor::new(zip.clone()));
+    assert!(matches!(result, Err(Error::PathEscape { .. })));
+    assert_eq!(std::fs::read(&target).unwrap(), b"sensitive");
+    assert!(!extractor_dest.path().join("good.txt").exists());
+
+    let driver_dest = tempdir().unwrap();
+    symlink(&target, driver_dest.path().join("link")).unwrap();
+    let result = Driver::new(driver_dest.path())
+        .unwrap()
+        .junk_paths(true)
+        .overwrite(OverwriteMode::Overwrite)
+        .validation(ValidationMode::ValidateFirst)
+        .extract_zip(ZipAdapter::new(Cursor::new(zip)).unwrap());
+    assert!(matches!(result, Err(Error::PathEscape { .. })));
+    assert_eq!(std::fs::read(&target).unwrap(), b"sensitive");
+    assert!(!driver_dest.path().join("good.txt").exists());
+}
+
 #[test]
 fn extractor_filter_sees_full_path() {
     // b/x.txt is filtered out, so it can't collide with a/x.txt.

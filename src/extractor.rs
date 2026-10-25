@@ -506,6 +506,10 @@ impl Extractor {
                 continue;
             } else {
                 let base = base_name(&name)?;
+                self.jail.join(&base).map_err(|e| Error::PathEscape {
+                    entry: name.clone(),
+                    detail: e.to_string(),
+                })?;
                 if matches!(self.overwrite, OverwritePolicy::Error) {
                     flat.claim(&base, &name)?;
                 }
@@ -559,7 +563,7 @@ impl Extractor {
                         // SECURITY: Remove any existing symlink first to prevent following
                         if let Ok(m) = fs::symlink_metadata(&safe_path) {
                             if m.file_type().is_symlink() {
-                                let _ = fs::remove_file(&safe_path);
+                                fs::remove_file(&safe_path)?;
                             }
                         }
                         // Now create/truncate
@@ -731,6 +735,10 @@ impl Extractor {
             // Collision rejection applies only to the Error overwrite policy.
             if self.junk_paths && !entry.is_dir() && !entry.is_symlink() && keep {
                 let base = base_name(&name)?;
+                self.jail.join(&base).map_err(|e| Error::PathEscape {
+                    entry: name.clone(),
+                    detail: e.to_string(),
+                })?;
                 if matches!(self.overwrite, OverwritePolicy::Error) {
                     flat.claim(&base, &name)?;
                 }

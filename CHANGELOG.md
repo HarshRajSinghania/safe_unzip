@@ -20,7 +20,8 @@ All notable changes to this project will be documented in this file.
     writing. Collision checks use portable Unicode case-folded and normalized
     name comparison. `ValidateFirst` validates every flattened output name,
     and validation-time filter decisions are reused by stable entry identity
-    during extraction.
+    during extraction. Flattened write targets are independently jail-checked,
+    including existing symlinks.
 
 ### Fixed
 

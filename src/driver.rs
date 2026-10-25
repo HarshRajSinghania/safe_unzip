@@ -9,6 +9,8 @@ use std::fs;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
+use path_jail::Jail;
+
 #[cfg(feature = "tar")]
 use crate::adapter::TarAdapter;
 use crate::adapter::ZipAdapter;
@@ -78,6 +80,8 @@ pub struct ExtractionReport {
 pub struct Driver {
     /// Destination directory.
     destination: PathBuf,
+    /// Path jail rooted at the destination.
+    jail: Jail,
     /// Security limits.
     limits: Limits,
     /// What to do on existing files.
@@ -117,8 +121,10 @@ impl Driver {
             }
         }
 
+        let jail = Jail::new(destination)?;
         Ok(Self {
             destination: destination.to_path_buf(),
+            jail,
             limits: Limits::default(),
             overwrite: OverwriteMode::default(),
             symlinks: SymlinkBehavior::default(),
@@ -173,6 +179,10 @@ impl Driver {
             return Ok(self.destination.join(&info.name));
         }
         let base = base_name(&info.name)?;
+        self.jail.join(&base).map_err(|e| Error::PathEscape {
+            entry: info.name.clone(),
+            detail: e.to_string(),
+        })?;
         if self.overwrite == OverwriteMode::Error {
             flat.claim(&base, &info.name)?;
         }
@@ -202,6 +212,10 @@ impl Driver {
                 continue;
             }
             let base = base_name(&info.name)?;
+            self.jail.join(&base).map_err(|e| Error::PathEscape {
+                entry: info.name.clone(),
+                detail: e.to_string(),
+            })?;
             if self.overwrite == OverwriteMode::Error {
                 flat.claim(&base, &info.name)?;
             }
@@ -446,7 +460,7 @@ impl Driver {
                         // SECURITY: Remove any existing symlink first to prevent following
                         if let Ok(m) = fs::symlink_metadata(&safe_path) {
                             if m.file_type().is_symlink() {
-                                let _ = fs::remove_file(&safe_path);
+                                fs::remove_file(&safe_path)?;
                             }
                         }
                         // Now create/truncate
@@ -751,7 +765,7 @@ impl Driver {
             OverwriteMode::Overwrite => {
                 if let Ok(m) = fs::symlink_metadata(path) {
                     if m.file_type().is_symlink() {
-                        let _ = fs::remove_file(path);
+                        fs::remove_file(path)?;
                     }
                 }
                 Ok(Some(fs::File::create(path)?))
