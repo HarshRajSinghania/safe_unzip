@@ -4,6 +4,7 @@ use path_jail::Jail;
 
 use crate::adapter::drain_checked;
 use crate::copy::copy_entry;
+use crate::flatten::{base_name, FlatNames};
 use crate::partial::PartialFile;
 use std::fs;
 use std::io::{Read, Seek};
@@ -134,6 +135,7 @@ pub struct Extractor {
     overwrite: OverwritePolicy,
     symlinks: SymlinkPolicy,
     mode: ExtractionMode,
+    junk_paths: bool,
     // Using a boxed closure for the filter
     #[allow(clippy::type_complexity)]
     filter: Option<Box<dyn Fn(&EntryInfo) -> bool + Send + Sync>>,
@@ -201,6 +203,7 @@ impl Extractor {
             overwrite: OverwritePolicy::default(),
             symlinks: SymlinkPolicy::default(),
             mode: ExtractionMode::default(),
+            junk_paths: false,
             filter: None,
             on_progress: None,
         })
@@ -223,6 +226,31 @@ impl Extractor {
 
     pub fn mode(mut self, mode: ExtractionMode) -> Self {
         self.mode = mode;
+        self
+    }
+
+    /// Write every file at the destination root under its base name, without
+    /// creating directories (like `unzip -j`).
+    ///
+    /// All checks (filename rules, path jail, depth, filters) still run on each
+    /// entry's full archive path. Directory entries are skipped. When two
+    /// entries share a base name, the overwrite policy decides: `Error` (the
+    /// default) fails with [`Error::PathCollision`] naming both entries, `Skip`
+    /// keeps the first, and `Overwrite` keeps the last.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use safe_unzip::Extractor;
+    ///
+    /// // docs/guide/intro.md -> /tmp/out/intro.md
+    /// let report = Extractor::new("/tmp/out")?
+    ///     .junk_paths(true)
+    ///     .extract_file("archive.zip")?;
+    /// # Ok::<(), safe_unzip::Error>(())
+    /// ```
+    pub fn junk_paths(mut self, junk: bool) -> Self {
+        self.junk_paths = junk;
         self
     }
 
@@ -345,18 +373,23 @@ impl Extractor {
     pub fn extract<R: Read + Seek>(&self, reader: R) -> Result<Report, Error> {
         let mut archive = zip::ZipArchive::new(reader)?;
 
-        // If ValidateFirst mode, do a dry run first
-        if matches!(self.mode, ExtractionMode::ValidateFirst) {
-            self.validate_all(&mut archive)?;
-        }
+        // If ValidateFirst mode, do a dry run first. Junk-path collision
+        // validation may evaluate the filter, so cache those decisions and
+        // reuse them during extraction.
+        let filter_decisions = if matches!(self.mode, ExtractionMode::ValidateFirst) {
+            self.validate_all(&mut archive)?
+        } else {
+            None
+        };
 
         let mut report = Report::default();
         let mut total_bytes_written: u64 = 0;
         let total_entries = archive.len();
+        let mut flat = FlatNames::default();
 
         for i in 0..total_entries {
             let mut entry = archive.by_index(i)?;
-            let name = entry.name().to_string();
+            let name = entry.name()?.into_owned();
 
             // Call progress callback if set
             if let Some(ref callback) = self.on_progress {
@@ -430,11 +463,13 @@ impl Extractor {
                 is_symlink: entry.is_symlink(),
             };
 
-            if let Some(ref filter) = self.filter {
-                if !filter(&info) {
-                    report.entries_skipped += 1;
-                    continue;
-                }
+            let keep = filter_decisions
+                .as_ref()
+                .map(|decisions| decisions[i])
+                .unwrap_or_else(|| self.filter.as_ref().is_none_or(|filter| filter(&info)));
+            if !keep {
+                report.entries_skipped += 1;
+                continue;
             }
 
             // 5. CHECK: Limits (Count & Lookahead Total)
@@ -463,6 +498,23 @@ impl Extractor {
                     would_be: total_bytes_written + entry.size(),
                 });
             }
+
+            // 6. Junk paths: drop directories, write files under their base name.
+            let safe_path = if !self.junk_paths {
+                safe_path
+            } else if entry.is_dir() {
+                continue;
+            } else {
+                let base = base_name(&name)?;
+                self.jail.join(&base).map_err(|e| Error::PathEscape {
+                    entry: name.clone(),
+                    detail: e.to_string(),
+                })?;
+                if matches!(self.overwrite, OverwritePolicy::Error) {
+                    flat.claim(&base, &name)?;
+                }
+                self.root.join(base)
+            };
 
             // 7. EXECUTION
             if entry.is_dir() {
@@ -511,7 +563,7 @@ impl Extractor {
                         // SECURITY: Remove any existing symlink first to prevent following
                         if let Ok(m) = fs::symlink_metadata(&safe_path) {
                             if m.file_type().is_symlink() {
-                                let _ = fs::remove_file(&safe_path);
+                                fs::remove_file(&safe_path)?;
                             }
                         }
                         // Now create/truncate
@@ -595,20 +647,30 @@ impl Extractor {
     /// decompresses each file to verify its CRC32. The metadata checks bound
     /// the declared sizes, so the integrity pass cannot be used as a bomb.
     ///
-    /// **Note:** Filter callbacks are NOT applied during validation. This means:
+    /// **Note:** Filter callbacks are normally not applied during validation.
+    /// Junk-paths output-name validation is the exception: it evaluates each
+    /// filter once and returns the cached decisions for reuse during extraction.
+    /// In either case:
     /// - File count/size limits are checked against ALL entries
     /// - Extraction may skip entries the filter rejects
     /// - This is conservative: validation may reject archives that would succeed with filtering
     ///
     /// This is intentional: filters are advisory, not security boundaries.
-    fn validate_all<R: Read + Seek>(&self, archive: &mut zip::ZipArchive<R>) -> Result<(), Error> {
+    fn validate_all<R: Read + Seek>(
+        &self,
+        archive: &mut zip::ZipArchive<R>,
+    ) -> Result<Option<Vec<bool>>, Error> {
         let mut total_size: u64 = 0;
         let mut file_count: usize = 0;
+
+        let mut flat = FlatNames::default();
+        let cache_filter = self.junk_paths && self.filter.is_some();
+        let mut filter_decisions = cache_filter.then(|| Vec::with_capacity(archive.len()));
 
         for i in 0..archive.len() {
             // by_index_raw reads metadata WITHOUT decompressing
             let entry = archive.by_index_raw(i)?;
-            let name = entry.name().to_string();
+            let name = entry.name()?.into_owned();
 
             // 0. Filename sanitization
             if let Err(reason) = self.validate_filename(&name) {
@@ -654,6 +716,40 @@ impl Extractor {
                 });
             }
 
+            let keep = if let Some(ref mut decisions) = filter_decisions {
+                // Extraction skips symlinks before reaching the filter. Keep a
+                // placeholder so cached decisions still align by ZIP index.
+                let keep = if entry.is_symlink() {
+                    false
+                } else {
+                    let info = EntryInfo {
+                        name: &name,
+                        size: entry.size(),
+                        compressed_size: entry.compressed_size(),
+                        is_dir: entry.is_dir(),
+                        is_symlink: false,
+                    };
+                    self.filter.as_ref().is_none_or(|filter| filter(&info))
+                };
+                decisions.push(keep);
+                keep
+            } else {
+                true
+            };
+
+            // 5. Validate flattened output names among entries the filter keeps.
+            // Collision rejection applies only to the Error overwrite policy.
+            if self.junk_paths && !entry.is_dir() && !entry.is_symlink() && keep {
+                let base = base_name(&name)?;
+                self.jail.join(&base).map_err(|e| Error::PathEscape {
+                    entry: name.clone(),
+                    detail: e.to_string(),
+                })?;
+                if matches!(self.overwrite, OverwritePolicy::Error) {
+                    flat.claim(&base, &name)?;
+                }
+            }
+
             // Accumulate totals (skip symlinks and dirs)
             if !entry.is_dir() && !entry.is_symlink() {
                 total_size += entry.size();
@@ -684,12 +780,12 @@ impl Extractor {
             if entry.is_dir() || entry.is_symlink() {
                 continue;
             }
-            let name = entry.name().to_string();
+            let name = entry.name()?.into_owned();
             let declared = entry.size();
             drain_checked(&mut entry, &name, declared)?;
         }
 
-        Ok(())
+        Ok(filter_decisions)
     }
 
     /// Extract from a file path. Convenience wrapper around `extract()`.
@@ -733,7 +829,7 @@ impl Extractor {
 
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i)?;
-            let name = entry.name().to_string();
+            let name = entry.name()?.into_owned();
 
             // Check for encrypted entries
             if entry.encrypted() {

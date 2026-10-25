@@ -30,13 +30,15 @@ path_jail = "0.5"
 clap = { version = "4", features = ["derive"], optional = true }
 clap_complete = { version = "4", optional = true }
 # Use minimal zip features to avoid heavy compression dependencies
-zip = { version = "2.1", default-features = false, features = ["deflate", "time"] }
+zip = { version = "9.1", default-features = false, features = ["deflate", "time"] }
 tar = { version = "0.4", optional = true }
 flate2 = { version = "1", optional = true }  # For .tar.gz support
 glob-match = "0.2"  # For include/exclude patterns
+unicode-normalization = "0.1"
+unicode-casefold = "0.2"
 sevenz-rust2 = { version = "0.23", default-features = false, features = ["bzip2", "ppmd"], optional = true }  # For 7z support (read-only)
-tokio = { version = "1", features = ["rt", "fs", "sync"], optional = true }
+tokio = { version = "1.54.1", features = ["rt", "fs", "sync"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros"] }

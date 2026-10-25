@@ -3,6 +3,7 @@
 //! Provides read-only extraction of 7z archives with the same security
 //! guarantees as ZIP and TAR.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek};
 use std::path::Path;
@@ -107,12 +108,21 @@ impl SevenZAdapter {
 
     /// Get all entry metadata (from the header; nothing is decompressed).
     pub fn entries_metadata(&self) -> Vec<EntryInfo> {
+        self.entries_metadata_indexed()
+            .into_iter()
+            .map(|(_, info)| info)
+            .collect()
+    }
+
+    /// Get entry metadata paired with its stable archive-header index.
+    pub(crate) fn entries_metadata_indexed(&self) -> Vec<(usize, EntryInfo)> {
         self.reader
             .archive()
             .files
             .iter()
-            .filter(|e| !e.is_anti_item)
-            .map(entry_info)
+            .enumerate()
+            .filter(|(_, entry)| !entry.is_anti_item)
+            .map(|(index, entry)| (index, entry_info(entry)))
             .collect()
     }
 
@@ -138,7 +148,24 @@ impl SevenZAdapter {
     where
         F: FnMut(&EntryInfo, Option<&mut dyn Read>) -> Result<bool, Error>,
     {
+        self.for_each_indexed(|_, info, reader| callback(info, reader))
+    }
+
+    /// Process entries with their stable archive-header indexes.
+    pub(crate) fn for_each_indexed<F>(&mut self, mut callback: F) -> Result<(), Error>
+    where
+        F: FnMut(usize, &EntryInfo, Option<&mut dyn Read>) -> Result<bool, Error>,
+    {
         self.check_decoder_memory()?;
+
+        let entry_indexes: HashMap<usize, usize> = self
+            .reader
+            .archive()
+            .files
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (entry as *const ArchiveEntry as usize, index))
+            .collect();
 
         // sevenz-rust2's callback must return its own error type, so park ours
         // here and stop iteration.
@@ -155,13 +182,14 @@ impl SevenZAdapter {
             if entry.is_anti_item {
                 return Ok(true);
             }
+            let entry_index = entry_indexes[&(entry as *const ArchiveEntry as usize)];
             let info = entry_info(entry);
             let is_file = matches!(info.kind, EntryKind::File);
 
             let outcome = if is_file {
-                callback(&info, Some(&mut *reader))
+                callback(entry_index, &info, Some(&mut *reader))
             } else {
-                callback(&info, None)
+                callback(entry_index, &info, None)
             };
 
             match outcome {

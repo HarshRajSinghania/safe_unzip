@@ -3,9 +3,13 @@
 //! The driver orchestrates extraction using adapters (format-specific) and
 //! policies (security checks).
 
+#[cfg(feature = "sevenz")]
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
+
+use path_jail::Jail;
 
 #[cfg(feature = "tar")]
 use crate::adapter::TarAdapter;
@@ -14,6 +18,7 @@ use crate::adapter::ZipAdapter;
 use crate::copy::copy_entry;
 use crate::entry::{EntryInfo, EntryKind};
 use crate::error::Error;
+use crate::flatten::{base_name, FlatNames};
 use crate::limits::Limits;
 use crate::partial::PartialFile;
 use crate::policy::{
@@ -75,6 +80,8 @@ pub struct ExtractionReport {
 pub struct Driver {
     /// Destination directory.
     destination: PathBuf,
+    /// Path jail rooted at the destination.
+    jail: Jail,
     /// Security limits.
     limits: Limits,
     /// What to do on existing files.
@@ -83,6 +90,8 @@ pub struct Driver {
     symlinks: SymlinkBehavior,
     /// Validation strategy.
     validation: ValidationMode,
+    /// Write files at the destination root under their base names.
+    junk_paths: bool,
     /// Optional entry filter.
     #[allow(clippy::type_complexity)]
     filter: Option<Box<dyn Fn(&EntryInfo) -> bool + Send + Sync>>,
@@ -112,12 +121,15 @@ impl Driver {
             }
         }
 
+        let jail = Jail::new(destination)?;
         Ok(Self {
             destination: destination.to_path_buf(),
+            jail,
             limits: Limits::default(),
             overwrite: OverwriteMode::default(),
             symlinks: SymlinkBehavior::default(),
             validation: ValidationMode::default(),
+            junk_paths: false,
             filter: None,
         })
     }
@@ -144,6 +156,75 @@ impl Driver {
     pub fn validation(mut self, mode: ValidationMode) -> Self {
         self.validation = mode;
         self
+    }
+
+    /// Write every file at the destination root under its base name, without
+    /// creating directories (like `unzip -j`).
+    ///
+    /// All checks (path policy, depth, filters) still run on each entry's full
+    /// archive path. Directory entries are skipped. When two entries share a
+    /// base name, the overwrite mode decides: `Error` (the default) fails with
+    /// [`Error::PathCollision`] naming both entries (before anything is written
+    /// in `ValidateFirst` mode), `Skip` keeps the first, and `Overwrite` keeps
+    /// the last.
+    pub fn junk_paths(mut self, junk: bool) -> Self {
+        self.junk_paths = junk;
+        self
+    }
+
+    /// Where an entry is written. With junk paths, files go to the
+    /// destination root under their base name.
+    fn output_path(&self, info: &EntryInfo, flat: &mut FlatNames) -> Result<PathBuf, Error> {
+        if !self.junk_paths || !matches!(info.kind, EntryKind::File) {
+            return Ok(self.destination.join(&info.name));
+        }
+        let base = base_name(&info.name)?;
+        self.jail.join(&base).map_err(|e| Error::PathEscape {
+            entry: info.name.clone(),
+            detail: e.to_string(),
+        })?;
+        if self.overwrite == OverwriteMode::Error {
+            flat.claim(&base, &info.name)?;
+        }
+        Ok(self.destination.join(base))
+    }
+
+    /// In junk-paths mode, validate every kept file's flattened name before
+    /// writing. With `OverwriteMode::Error`, also reject collisions.
+    fn check_flat_names<'a>(
+        &self,
+        entries: impl IntoIterator<Item = &'a EntryInfo>,
+    ) -> Result<Option<Vec<bool>>, Error> {
+        if !self.junk_paths {
+            return Ok(None);
+        }
+        let mut flat = FlatNames::default();
+        let mut filter_decisions = self.filter.as_ref().map(|_| Vec::new());
+        for info in entries {
+            let keep = if let Some(ref mut decisions) = filter_decisions {
+                let keep = self.filter.as_ref().is_none_or(|filter| filter(info));
+                decisions.push(keep);
+                keep
+            } else {
+                true
+            };
+            if !keep || !matches!(info.kind, EntryKind::File) {
+                continue;
+            }
+            let base = base_name(&info.name)?;
+            self.jail.join(&base).map_err(|e| Error::PathEscape {
+                entry: info.name.clone(),
+                detail: e.to_string(),
+            })?;
+            if self.overwrite == OverwriteMode::Error {
+                flat.claim(&base, &info.name)?;
+            }
+        }
+        Ok(filter_decisions)
+    }
+
+    fn keep_entry(&self, info: &EntryInfo, cached: Option<bool>) -> bool {
+        cached.unwrap_or_else(|| self.filter.as_ref().is_none_or(|filter| filter(info)))
     }
 
     /// Set entry filter.
@@ -241,14 +322,24 @@ impl Driver {
         let policies = self.build_policies()?;
 
         // ValidateFirst mode: check all entries before extracting
-        if self.validation == ValidationMode::ValidateFirst {
-            self.validate_all_zip(&mut adapter, &policies)?;
-        }
+        let filter_decisions = if self.validation == ValidationMode::ValidateFirst {
+            self.validate_all_zip(&mut adapter, &policies)?
+        } else {
+            None
+        };
 
         let mut state = ExtractionState::default();
+        let mut flat = FlatNames::default();
 
         for i in 0..adapter.len() {
-            self.extract_zip_entry(&mut adapter, i, &policies, &mut state)?;
+            self.extract_zip_entry(
+                &mut adapter,
+                i,
+                &policies,
+                &mut state,
+                &mut flat,
+                filter_decisions.as_ref().map(|decisions| decisions[i]),
+            )?;
         }
 
         Ok(ExtractionReport {
@@ -264,8 +355,9 @@ impl Driver {
         &self,
         adapter: &mut ZipAdapter<R>,
         policies: &PolicyChain,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Vec<bool>>, Error> {
         let entries = adapter.entries_metadata()?;
+        let filter_decisions = self.check_flat_names(&entries)?;
         let mut state = ExtractionState::default();
 
         for info in entries {
@@ -285,7 +377,7 @@ impl Driver {
             adapter.verify_entry(index)?;
         }
 
-        Ok(())
+        Ok(filter_decisions)
     }
 
     /// Extract a single ZIP entry.
@@ -295,15 +387,15 @@ impl Driver {
         index: usize,
         policies: &PolicyChain,
         state: &mut ExtractionState,
+        flat: &mut FlatNames,
+        filter_decision: Option<bool>,
     ) -> Result<(), Error> {
         let info = adapter.entry_info(index)?;
 
         // Apply filter
-        if let Some(ref filter) = self.filter {
-            if !filter(&info) {
-                state.entries_skipped += 1;
-                return Ok(());
-            }
+        if !self.keep_entry(&info, filter_decision) {
+            state.entries_skipped += 1;
+            return Ok(());
         }
 
         // Check policies
@@ -315,10 +407,12 @@ impl Driver {
             return Ok(());
         }
 
-        let safe_path = self.destination.join(&info.name);
+        let safe_path = self.output_path(&info, flat)?;
 
         // Extract based on entry type
         match info.kind {
+            // Junk paths: no directories are created.
+            EntryKind::Directory if self.junk_paths => {}
             EntryKind::Directory => {
                 // For directories, just create (idempotent)
                 fs::create_dir_all(&safe_path)?;
@@ -366,7 +460,7 @@ impl Driver {
                         // SECURITY: Remove any existing symlink first to prevent following
                         if let Ok(m) = fs::symlink_metadata(&safe_path) {
                             if m.file_type().is_symlink() {
-                                let _ = fs::remove_file(&safe_path);
+                                fs::remove_file(&safe_path)?;
                             }
                         }
                         // Now create/truncate
@@ -439,10 +533,25 @@ impl Driver {
                 }
             }
 
+            let filter_decisions = self.check_flat_names(&entries)?;
+
             // Extract from cache
             let mut state = ExtractionState::default();
+            let mut flat = FlatNames::default();
+            let mut entry_index = 0;
             adapter.extract_cached(|info, data| {
-                self.extract_tar_entry_data(&info, data, &policies, &mut state)?;
+                let filter_decision = filter_decisions
+                    .as_ref()
+                    .map(|decisions| decisions[entry_index]);
+                entry_index += 1;
+                self.extract_tar_entry_data(
+                    &info,
+                    data,
+                    &policies,
+                    &mut state,
+                    &mut flat,
+                    filter_decision,
+                )?;
                 Ok(true)
             })?;
 
@@ -456,9 +565,10 @@ impl Driver {
 
         // Streaming mode: extract as we read
         let mut state = ExtractionState::default();
+        let mut flat = FlatNames::default();
 
         adapter.for_each(|info, reader| {
-            self.extract_tar_entry(&info, reader, &policies, &mut state)?;
+            self.extract_tar_entry(&info, reader, &policies, &mut state, &mut flat, None)?;
             Ok(true)
         })?;
 
@@ -478,13 +588,13 @@ impl Driver {
         reader: Option<&mut dyn Read>,
         policies: &PolicyChain,
         state: &mut ExtractionState,
+        flat: &mut FlatNames,
+        filter_decision: Option<bool>,
     ) -> Result<(), Error> {
         // Apply filter
-        if let Some(ref filter) = self.filter {
-            if !filter(info) {
-                state.entries_skipped += 1;
-                return Ok(());
-            }
+        if !self.keep_entry(info, filter_decision) {
+            state.entries_skipped += 1;
+            return Ok(());
         }
 
         // Check policies
@@ -496,9 +606,11 @@ impl Driver {
             return Ok(());
         }
 
-        let safe_path = self.destination.join(&info.name);
+        let safe_path = self.output_path(info, flat)?;
 
         match info.kind {
+            // Junk paths: no directories are created.
+            EntryKind::Directory if self.junk_paths => {}
             EntryKind::Directory => {
                 fs::create_dir_all(&safe_path)?;
                 state.dirs_created += 1;
@@ -550,13 +662,13 @@ impl Driver {
         data: Option<&[u8]>,
         policies: &PolicyChain,
         state: &mut ExtractionState,
+        flat: &mut FlatNames,
+        filter_decision: Option<bool>,
     ) -> Result<(), Error> {
         // Apply filter
-        if let Some(ref filter) = self.filter {
-            if !filter(info) {
-                state.entries_skipped += 1;
-                return Ok(());
-            }
+        if !self.keep_entry(info, filter_decision) {
+            state.entries_skipped += 1;
+            return Ok(());
         }
 
         // Check policies (already validated, but need for state updates)
@@ -568,9 +680,11 @@ impl Driver {
             return Ok(());
         }
 
-        let safe_path = self.destination.join(&info.name);
+        let safe_path = self.output_path(info, flat)?;
 
         match info.kind {
+            // Junk paths: no directories are created.
+            EntryKind::Directory if self.junk_paths => {}
             EntryKind::Directory => {
                 fs::create_dir_all(&safe_path)?;
                 state.dirs_created += 1;
@@ -651,7 +765,7 @@ impl Driver {
             OverwriteMode::Overwrite => {
                 if let Ok(m) = fs::symlink_metadata(path) {
                     if m.file_type().is_symlink() {
-                        let _ = fs::remove_file(path);
+                        fs::remove_file(path)?;
                     }
                 }
                 Ok(Some(fs::File::create(path)?))
@@ -696,13 +810,26 @@ impl Driver {
     ) -> Result<ExtractionReport, Error> {
         let policies = self.build_policies()?;
 
-        if self.validation == ValidationMode::ValidateFirst {
-            self.validate_all_7z(&mut adapter, &policies)?;
-        }
+        let filter_decisions = if self.validation == ValidationMode::ValidateFirst {
+            self.validate_all_7z(&mut adapter, &policies)?
+        } else {
+            None
+        };
 
         let mut state = ExtractionState::default();
-        adapter.for_each(|info, reader| {
-            self.extract_7z_entry(info, reader, &policies, &mut state)?;
+        let mut flat = FlatNames::default();
+        adapter.for_each_indexed(|entry_index, info, reader| {
+            let filter_decision = filter_decisions
+                .as_ref()
+                .and_then(|decisions| decisions.get(&entry_index).copied());
+            self.extract_7z_entry(
+                info,
+                reader,
+                &policies,
+                &mut state,
+                &mut flat,
+                filter_decision,
+            )?;
             Ok(true)
         })?;
 
@@ -720,9 +847,22 @@ impl Driver {
         &self,
         adapter: &mut crate::adapter::SevenZAdapter,
         policies: &PolicyChain,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<HashMap<usize, bool>>, Error> {
+        let indexed_entries = adapter.entries_metadata_indexed();
+        let entries: Vec<_> = indexed_entries
+            .iter()
+            .map(|(_, info)| info.clone())
+            .collect();
+        let filter_decisions = self.check_flat_names(&entries)?;
+        let filter_decisions = filter_decisions.map(|decisions| {
+            indexed_entries
+                .iter()
+                .zip(decisions)
+                .map(|((index, _), keep)| (*index, keep))
+                .collect()
+        });
         let mut state = ExtractionState::default();
-        for info in adapter.entries_metadata() {
+        for info in entries {
             policies.check_all(&info, &state)?;
             if matches!(info.kind, EntryKind::File) {
                 state.bytes_written += info.size;
@@ -733,7 +873,8 @@ impl Driver {
         // Declared sizes now fit the limits, and each entry's reader stops at
         // its declared size, so this pass is bounded. The adapter drains
         // every file (checking CRC32) when the callback leaves it unread.
-        adapter.for_each(|_, _| Ok(true))
+        adapter.for_each(|_, _| Ok(true))?;
+        Ok(filter_decisions)
     }
 
     /// Extract a single 7z entry.
@@ -744,21 +885,23 @@ impl Driver {
         reader: Option<&mut dyn Read>,
         policies: &PolicyChain,
         state: &mut ExtractionState,
+        flat: &mut FlatNames,
+        filter_decision: Option<bool>,
     ) -> Result<(), Error> {
         // Apply filter
-        if let Some(ref filter) = self.filter {
-            if !filter(info) {
-                state.entries_skipped += 1;
-                return Ok(());
-            }
+        if !self.keep_entry(info, filter_decision) {
+            state.entries_skipped += 1;
+            return Ok(());
         }
 
         // Validate with policies
         policies.check_all(info, state)?;
 
-        let safe_path = self.destination.join(&info.name);
+        let safe_path = self.output_path(info, flat)?;
 
         match info.kind {
+            // Junk paths: no directories are created.
+            EntryKind::Directory if self.junk_paths => {}
             EntryKind::Directory => {
                 fs::create_dir_all(&safe_path)?;
                 state.dirs_created += 1;

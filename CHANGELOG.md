@@ -4,8 +4,30 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Junk paths** ([#4](https://github.com/tenuo-ai/safe_unzip/issues/4)): extract
+  every file into the destination under its base name without creating
+  directories, like `unzip -j`.
+  - Rust: `Extractor::junk_paths(true)`, `AsyncExtractor::junk_paths(true)`,
+    `Driver::junk_paths(true)` (ZIP, TAR, 7z)
+  - CLI: `-j` / `--junk-paths` (Rust and `python -m safe_unzip`)
+  - Python: `Extractor(...).junk_paths()`
+  - All checks and filters still use the full archive path. Base-name
+    collisions follow the overwrite policy; with `Error` (the default) the new
+    `Error::PathCollision { entry, previous, path }` names both entries
+    (Python: `AlreadyExistsError`), and `ValidateFirst` reports it before
+    writing. Collision checks use portable Unicode case-folded and normalized
+    name comparison. `ValidateFirst` validates every flattened output name,
+    and validation-time filter decisions are reused by stable entry identity
+    during extraction. Flattened write targets are independently jail-checked,
+    including existing symlinks.
+
 ### Fixed
 
+- Updated `zip` to 9.1 to address RUSTSEC-2026-0367,
+  RUSTSEC-2026-0368, and RUSTSEC-2026-0369.
+- Updated `tokio` to 1.54.1 to address RUSTSEC-2026-0386.
 - **Corrupt entries no longer leave files on disk** ([#3](https://github.com/tenuo-ai/safe_unzip/issues/3)).
   A file whose write fails (CRC32 mismatch, size mismatch, limit exceeded, I/O
   error) is now removed instead of left truncated or unverified. Applies to
@@ -234,4 +256,3 @@ Extractor("/path/to/dest").extract_file("archive.zip")
 - [crates.io](https://crates.io/crates/safe_unzip)
 - [PyPI](https://pypi.org/project/safe-unzip/)
 - [Documentation](https://github.com/tenuo-ai/safe_unzip)
-
