@@ -389,7 +389,7 @@ impl Extractor {
 
         for i in 0..total_entries {
             let mut entry = archive.by_index(i)?;
-            let name = entry.name().to_string();
+            let name = entry.name()?.into_owned();
 
             // Call progress callback if set
             if let Some(ref callback) = self.on_progress {
@@ -668,7 +668,7 @@ impl Extractor {
         for i in 0..archive.len() {
             // by_index_raw reads metadata WITHOUT decompressing
             let entry = archive.by_index_raw(i)?;
-            let name = entry.name().to_string();
+            let name = entry.name()?.into_owned();
 
             // 0. Filename sanitization
             if let Err(reason) = self.validate_filename(&name) {
@@ -769,7 +769,7 @@ impl Extractor {
             if entry.is_dir() || entry.is_symlink() {
                 continue;
             }
-            let name = entry.name().to_string();
+            let name = entry.name()?.into_owned();
             let declared = entry.size();
             drain_checked(&mut entry, &name, declared)?;
         }
@@ -818,7 +818,7 @@ impl Extractor {
 
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i)?;
-            let name = entry.name().to_string();
+            let name = entry.name()?.into_owned();
 
             // Check for encrypted entries
             if entry.encrypted() {

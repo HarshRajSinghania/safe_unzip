@@ -23,6 +23,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Updated `zip` to 9.1 to address RUSTSEC-2026-0367,
+  RUSTSEC-2026-0368, and RUSTSEC-2026-0369.
+- Updated `tokio` to 1.54.1 to address RUSTSEC-2026-0386.
 - **Corrupt entries no longer leave files on disk** ([#3](https://github.com/tenuo-ai/safe_unzip/issues/3)).
   A file whose write fails (CRC32 mismatch, size mismatch, limit exceeded, I/O
   error) is now removed instead of left truncated or unverified. Applies to

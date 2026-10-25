@@ -44,7 +44,7 @@ impl<R: Read + Seek> ZipAdapter<R> {
 
         for i in 0..self.archive.len() {
             let entry = self.archive.by_index_raw(i)?;
-            let name = entry.name().to_string();
+            let name = entry.name()?.into_owned();
 
             // Reject encrypted entries
             if entry.encrypted() {
@@ -92,7 +92,7 @@ impl<R: Read + Seek> ZipAdapter<R> {
     {
         for i in 0..self.archive.len() {
             let mut entry = self.archive.by_index(i)?;
-            let name = entry.name().to_string();
+            let name = entry.name()?.into_owned();
 
             // Reject encrypted entries
             if entry.encrypted() {
@@ -146,7 +146,7 @@ impl<R: Read + Seek> ZipAdapter<R> {
         limit: u64,
     ) -> Result<(EntryInfo, u64), Error> {
         let mut entry = self.archive.by_index(index)?;
-        let name = entry.name().to_string();
+        let name = entry.name()?.into_owned();
 
         // Reject encrypted entries
         if entry.encrypted() {
@@ -224,7 +224,7 @@ impl<R: Read + Seek> ZipAdapter<R> {
     /// decompresses to more than its declared size.
     pub fn verify_entry(&mut self, index: usize) -> Result<u64, Error> {
         let mut entry = self.archive.by_index(index)?;
-        let name = entry.name().to_string();
+        let name = entry.name()?.into_owned();
 
         if entry.encrypted() {
             return Err(Error::EncryptedEntry { entry: name });
@@ -244,7 +244,7 @@ impl<R: Read + Seek> ZipAdapter<R> {
     /// Returns `Error::EncryptedEntry` if the entry is encrypted.
     pub fn entry_info(&mut self, index: usize) -> Result<EntryInfo, Error> {
         let entry = self.archive.by_index_raw(index)?;
-        let name = entry.name().to_string();
+        let name = entry.name()?.into_owned();
 
         // Reject encrypted entries
         if entry.encrypted() {
