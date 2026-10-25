@@ -373,10 +373,14 @@ impl Extractor {
     pub fn extract<R: Read + Seek>(&self, reader: R) -> Result<Report, Error> {
         let mut archive = zip::ZipArchive::new(reader)?;
 
-        // If ValidateFirst mode, do a dry run first
-        if matches!(self.mode, ExtractionMode::ValidateFirst) {
-            self.validate_all(&mut archive)?;
-        }
+        // If ValidateFirst mode, do a dry run first. Junk-path collision
+        // validation may evaluate the filter, so cache those decisions and
+        // reuse them during extraction.
+        let filter_decisions = if matches!(self.mode, ExtractionMode::ValidateFirst) {
+            self.validate_all(&mut archive)?
+        } else {
+            None
+        };
 
         let mut report = Report::default();
         let mut total_bytes_written: u64 = 0;
@@ -459,11 +463,13 @@ impl Extractor {
                 is_symlink: entry.is_symlink(),
             };
 
-            if let Some(ref filter) = self.filter {
-                if !filter(&info) {
-                    report.entries_skipped += 1;
-                    continue;
-                }
+            let keep = filter_decisions
+                .as_ref()
+                .map(|decisions| decisions[i])
+                .unwrap_or_else(|| self.filter.as_ref().is_none_or(|filter| filter(&info)));
+            if !keep {
+                report.entries_skipped += 1;
+                continue;
             }
 
             // 5. CHECK: Limits (Count & Lookahead Total)
@@ -637,17 +643,27 @@ impl Extractor {
     /// decompresses each file to verify its CRC32. The metadata checks bound
     /// the declared sizes, so the integrity pass cannot be used as a bomb.
     ///
-    /// **Note:** Filter callbacks are NOT applied during validation. This means:
+    /// **Note:** Filter callbacks are normally not applied during validation.
+    /// Junk-paths collision detection with the `Error` overwrite policy is the
+    /// exception: it evaluates each filter once and returns the cached decisions
+    /// for reuse during extraction. In either case:
     /// - File count/size limits are checked against ALL entries
     /// - Extraction may skip entries the filter rejects
     /// - This is conservative: validation may reject archives that would succeed with filtering
     ///
     /// This is intentional: filters are advisory, not security boundaries.
-    fn validate_all<R: Read + Seek>(&self, archive: &mut zip::ZipArchive<R>) -> Result<(), Error> {
+    fn validate_all<R: Read + Seek>(
+        &self,
+        archive: &mut zip::ZipArchive<R>,
+    ) -> Result<Option<Vec<bool>>, Error> {
         let mut total_size: u64 = 0;
         let mut file_count: usize = 0;
 
         let mut flat = FlatNames::default();
+        let cache_filter = self.junk_paths
+            && matches!(self.overwrite, OverwritePolicy::Error)
+            && self.filter.is_some();
+        let mut filter_decisions = cache_filter.then(|| Vec::with_capacity(archive.len()));
 
         for i in 0..archive.len() {
             // by_index_raw reads metadata WITHOUT decompressing
@@ -698,22 +714,29 @@ impl Extractor {
                 });
             }
 
+            let keep = if let Some(ref mut decisions) = filter_decisions {
+                let info = EntryInfo {
+                    name: &name,
+                    size: entry.size(),
+                    compressed_size: entry.compressed_size(),
+                    is_dir: entry.is_dir(),
+                    is_symlink: entry.is_symlink(),
+                };
+                let keep = self.filter.as_ref().is_none_or(|filter| filter(&info));
+                decisions.push(keep);
+                keep
+            } else {
+                true
+            };
+
             // 5. Junk-paths collisions, among entries the filter keeps
             if self.junk_paths
                 && matches!(self.overwrite, OverwritePolicy::Error)
                 && !entry.is_dir()
                 && !entry.is_symlink()
+                && keep
             {
-                let info = EntryInfo {
-                    name: &name,
-                    size: entry.size(),
-                    compressed_size: entry.compressed_size(),
-                    is_dir: false,
-                    is_symlink: false,
-                };
-                if self.filter.as_ref().is_none_or(|keep| keep(&info)) {
-                    flat.claim(&base_name(&name)?, &name)?;
-                }
+                flat.claim(&base_name(&name)?, &name)?;
             }
 
             // Accumulate totals (skip symlinks and dirs)
@@ -751,7 +774,7 @@ impl Extractor {
             drain_checked(&mut entry, &name, declared)?;
         }
 
-        Ok(())
+        Ok(filter_decisions)
     }
 
     /// Extract from a file path. Convenience wrapper around `extract()`.

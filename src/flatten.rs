@@ -7,6 +7,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use unicode_normalization::UnicodeNormalization;
+
 use crate::error::Error;
 
 /// The name a file entry is written under when paths are junked.
@@ -25,22 +27,34 @@ pub(crate) fn base_name(entry: &str) -> Result<PathBuf, Error> {
 /// collapse to the same file (`a/x.txt`, `b/x.txt`) are reported together.
 #[derive(Default)]
 pub(crate) struct FlatNames {
-    claimed: HashMap<PathBuf, String>,
+    claimed: HashMap<String, String>,
 }
 
 impl FlatNames {
     /// Claim `base` for `entry`, failing if an earlier entry already did.
     pub(crate) fn claim(&mut self, base: &Path, entry: &str) -> Result<(), Error> {
-        if let Some(previous) = self.claimed.get(base) {
+        let key = collision_key(base);
+        if let Some(previous) = self.claimed.get(&key) {
             return Err(Error::PathCollision {
                 entry: entry.to_string(),
                 previous: previous.clone(),
                 path: base.display().to_string(),
             });
         }
-        self.claimed.insert(base.to_path_buf(), entry.to_string());
+        self.claimed.insert(key, entry.to_string());
         Ok(())
     }
+}
+
+/// Use a portable comparison key so validation catches names that collapse on
+/// common case-insensitive or Unicode-normalizing destination filesystems.
+fn collision_key(base: &Path) -> String {
+    let name = base.to_string_lossy();
+    name.trim_end_matches([' ', '.'])
+        .chars()
+        .flat_map(char::to_lowercase)
+        .nfc()
+        .collect()
 }
 
 #[cfg(test)]
@@ -74,5 +88,30 @@ mod tests {
             }
             other => panic!("expected collision, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn collisions_use_portable_filename_equivalence() {
+        let mut flat = FlatNames::default();
+        flat.claim(Path::new("File.TXT"), "a/File.TXT").unwrap();
+        assert!(matches!(
+            flat.claim(Path::new("file.txt"), "b/file.txt"),
+            Err(Error::PathCollision { .. })
+        ));
+
+        let mut flat = FlatNames::default();
+        flat.claim(Path::new("file.txt"), "a/file.txt").unwrap();
+        assert!(matches!(
+            flat.claim(Path::new("file.txt."), "b/file.txt."),
+            Err(Error::PathCollision { .. })
+        ));
+
+        let mut flat = FlatNames::default();
+        flat.claim(Path::new("caf\u{e9}.txt"), "a/caf\u{e9}.txt")
+            .unwrap();
+        assert!(matches!(
+            flat.claim(Path::new("cafe\u{301}.txt"), "b/cafe\u{301}.txt"),
+            Err(Error::PathCollision { .. })
+        ));
     }
 }

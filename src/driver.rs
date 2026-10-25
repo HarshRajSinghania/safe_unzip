@@ -182,21 +182,30 @@ impl Driver {
     fn check_collisions<'a>(
         &self,
         entries: impl IntoIterator<Item = &'a EntryInfo>,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Vec<bool>>, Error> {
         if !self.junk_paths || self.overwrite != OverwriteMode::Error {
-            return Ok(());
+            return Ok(None);
         }
         let mut flat = FlatNames::default();
+        let mut filter_decisions = self.filter.as_ref().map(|_| Vec::new());
         for info in entries {
-            if !matches!(info.kind, EntryKind::File) {
-                continue;
-            }
-            if self.filter.as_ref().is_some_and(|keep| !keep(info)) {
+            let keep = if let Some(ref mut decisions) = filter_decisions {
+                let keep = self.filter.as_ref().is_none_or(|filter| filter(info));
+                decisions.push(keep);
+                keep
+            } else {
+                true
+            };
+            if !keep || !matches!(info.kind, EntryKind::File) {
                 continue;
             }
             flat.claim(&base_name(&info.name)?, &info.name)?;
         }
-        Ok(())
+        Ok(filter_decisions)
+    }
+
+    fn keep_entry(&self, info: &EntryInfo, cached: Option<bool>) -> bool {
+        cached.unwrap_or_else(|| self.filter.as_ref().is_none_or(|filter| filter(info)))
     }
 
     /// Set entry filter.
@@ -294,15 +303,24 @@ impl Driver {
         let policies = self.build_policies()?;
 
         // ValidateFirst mode: check all entries before extracting
-        if self.validation == ValidationMode::ValidateFirst {
-            self.validate_all_zip(&mut adapter, &policies)?;
-        }
+        let filter_decisions = if self.validation == ValidationMode::ValidateFirst {
+            self.validate_all_zip(&mut adapter, &policies)?
+        } else {
+            None
+        };
 
         let mut state = ExtractionState::default();
         let mut flat = FlatNames::default();
 
         for i in 0..adapter.len() {
-            self.extract_zip_entry(&mut adapter, i, &policies, &mut state, &mut flat)?;
+            self.extract_zip_entry(
+                &mut adapter,
+                i,
+                &policies,
+                &mut state,
+                &mut flat,
+                filter_decisions.as_ref().map(|decisions| decisions[i]),
+            )?;
         }
 
         Ok(ExtractionReport {
@@ -318,9 +336,9 @@ impl Driver {
         &self,
         adapter: &mut ZipAdapter<R>,
         policies: &PolicyChain,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Vec<bool>>, Error> {
         let entries = adapter.entries_metadata()?;
-        self.check_collisions(&entries)?;
+        let filter_decisions = self.check_collisions(&entries)?;
         let mut state = ExtractionState::default();
 
         for info in entries {
@@ -340,7 +358,7 @@ impl Driver {
             adapter.verify_entry(index)?;
         }
 
-        Ok(())
+        Ok(filter_decisions)
     }
 
     /// Extract a single ZIP entry.
@@ -351,15 +369,14 @@ impl Driver {
         policies: &PolicyChain,
         state: &mut ExtractionState,
         flat: &mut FlatNames,
+        filter_decision: Option<bool>,
     ) -> Result<(), Error> {
         let info = adapter.entry_info(index)?;
 
         // Apply filter
-        if let Some(ref filter) = self.filter {
-            if !filter(&info) {
-                state.entries_skipped += 1;
-                return Ok(());
-            }
+        if !self.keep_entry(&info, filter_decision) {
+            state.entries_skipped += 1;
+            return Ok(());
         }
 
         // Check policies
@@ -497,13 +514,25 @@ impl Driver {
                 }
             }
 
-            self.check_collisions(&entries)?;
+            let filter_decisions = self.check_collisions(&entries)?;
 
             // Extract from cache
             let mut state = ExtractionState::default();
             let mut flat = FlatNames::default();
+            let mut entry_index = 0;
             adapter.extract_cached(|info, data| {
-                self.extract_tar_entry_data(&info, data, &policies, &mut state, &mut flat)?;
+                let filter_decision = filter_decisions
+                    .as_ref()
+                    .map(|decisions| decisions[entry_index]);
+                entry_index += 1;
+                self.extract_tar_entry_data(
+                    &info,
+                    data,
+                    &policies,
+                    &mut state,
+                    &mut flat,
+                    filter_decision,
+                )?;
                 Ok(true)
             })?;
 
@@ -520,7 +549,7 @@ impl Driver {
         let mut flat = FlatNames::default();
 
         adapter.for_each(|info, reader| {
-            self.extract_tar_entry(&info, reader, &policies, &mut state, &mut flat)?;
+            self.extract_tar_entry(&info, reader, &policies, &mut state, &mut flat, None)?;
             Ok(true)
         })?;
 
@@ -541,13 +570,12 @@ impl Driver {
         policies: &PolicyChain,
         state: &mut ExtractionState,
         flat: &mut FlatNames,
+        filter_decision: Option<bool>,
     ) -> Result<(), Error> {
         // Apply filter
-        if let Some(ref filter) = self.filter {
-            if !filter(info) {
-                state.entries_skipped += 1;
-                return Ok(());
-            }
+        if !self.keep_entry(info, filter_decision) {
+            state.entries_skipped += 1;
+            return Ok(());
         }
 
         // Check policies
@@ -616,13 +644,12 @@ impl Driver {
         policies: &PolicyChain,
         state: &mut ExtractionState,
         flat: &mut FlatNames,
+        filter_decision: Option<bool>,
     ) -> Result<(), Error> {
         // Apply filter
-        if let Some(ref filter) = self.filter {
-            if !filter(info) {
-                state.entries_skipped += 1;
-                return Ok(());
-            }
+        if !self.keep_entry(info, filter_decision) {
+            state.entries_skipped += 1;
+            return Ok(());
         }
 
         // Check policies (already validated, but need for state updates)
@@ -764,14 +791,28 @@ impl Driver {
     ) -> Result<ExtractionReport, Error> {
         let policies = self.build_policies()?;
 
-        if self.validation == ValidationMode::ValidateFirst {
-            self.validate_all_7z(&mut adapter, &policies)?;
-        }
+        let filter_decisions = if self.validation == ValidationMode::ValidateFirst {
+            self.validate_all_7z(&mut adapter, &policies)?
+        } else {
+            None
+        };
 
         let mut state = ExtractionState::default();
         let mut flat = FlatNames::default();
+        let mut entry_index = 0;
         adapter.for_each(|info, reader| {
-            self.extract_7z_entry(info, reader, &policies, &mut state, &mut flat)?;
+            let filter_decision = filter_decisions
+                .as_ref()
+                .map(|decisions| decisions[entry_index]);
+            entry_index += 1;
+            self.extract_7z_entry(
+                info,
+                reader,
+                &policies,
+                &mut state,
+                &mut flat,
+                filter_decision,
+            )?;
             Ok(true)
         })?;
 
@@ -789,9 +830,9 @@ impl Driver {
         &self,
         adapter: &mut crate::adapter::SevenZAdapter,
         policies: &PolicyChain,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Vec<bool>>, Error> {
         let entries = adapter.entries_metadata();
-        self.check_collisions(&entries)?;
+        let filter_decisions = self.check_collisions(&entries)?;
         let mut state = ExtractionState::default();
         for info in entries {
             policies.check_all(&info, &state)?;
@@ -804,7 +845,8 @@ impl Driver {
         // Declared sizes now fit the limits, and each entry's reader stops at
         // its declared size, so this pass is bounded. The adapter drains
         // every file (checking CRC32) when the callback leaves it unread.
-        adapter.for_each(|_, _| Ok(true))
+        adapter.for_each(|_, _| Ok(true))?;
+        Ok(filter_decisions)
     }
 
     /// Extract a single 7z entry.
@@ -816,13 +858,12 @@ impl Driver {
         policies: &PolicyChain,
         state: &mut ExtractionState,
         flat: &mut FlatNames,
+        filter_decision: Option<bool>,
     ) -> Result<(), Error> {
         // Apply filter
-        if let Some(ref filter) = self.filter {
-            if !filter(info) {
-                state.entries_skipped += 1;
-                return Ok(());
-            }
+        if !self.keep_entry(info, filter_decision) {
+            state.entries_skipped += 1;
+            return Ok(());
         }
 
         // Validate with policies

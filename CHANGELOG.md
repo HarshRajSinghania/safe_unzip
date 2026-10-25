@@ -17,7 +17,9 @@ All notable changes to this project will be documented in this file.
     collisions follow the overwrite policy; with `Error` (the default) the new
     `Error::PathCollision { entry, previous, path }` names both entries
     (Python: `AlreadyExistsError`), and `ValidateFirst` reports it before
-    writing.
+    writing. Collision checks use portable case-insensitive, Unicode-normalized
+    name comparison, and validation-time filter decisions are reused during
+    extraction.
 
 ### Fixed
 
@@ -249,4 +251,3 @@ Extractor("/path/to/dest").extract_file("archive.zip")
 - [crates.io](https://crates.io/crates/safe_unzip)
 - [PyPI](https://pypi.org/project/safe-unzip/)
 - [Documentation](https://github.com/tenuo-ai/safe_unzip)
-

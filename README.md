@@ -304,6 +304,8 @@ All security checks (filename rules, path traversal, depth limit) and filters (`
 
 When two entries share a base name (`a/x.txt`, `b/x.txt`), the overwrite policy decides:
 
+Names are compared case-insensitively after Unicode normalization so collisions are detected consistently before writing on macOS, Windows, and Linux.
+
 | Policy | Result |
 |--------|--------|
 | `Error` (default) | Fails with `Error::PathCollision` naming both entries (Python: `AlreadyExistsError`). With `ValidateFirst`, nothing is written. |
@@ -728,4 +730,3 @@ Fuzzing targets are in `fuzz/fuzz_targets/`. Run fuzzing before releases to catc
 ## License
 
 MIT OR Apache-2.0
-

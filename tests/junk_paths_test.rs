@@ -8,6 +8,8 @@ use safe_unzip::{
 };
 use std::io::{Cursor, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tempfile::tempdir;
 use zip::write::FileOptions;
 
@@ -124,6 +126,43 @@ fn extractor_validate_first_collision_writes_nothing() {
         "{result:?}"
     );
     assert!(listing(dest.path()).is_empty());
+}
+
+#[test]
+fn extractor_validate_first_portable_collision_writes_nothing() {
+    let zip = make_zip(&[("a/File.TXT", b"first"), ("b/file.txt", b"second")]);
+    let dest = tempdir().unwrap();
+
+    let result = Extractor::new(dest.path())
+        .unwrap()
+        .junk_paths(true)
+        .mode(ExtractionMode::ValidateFirst)
+        .extract(Cursor::new(zip));
+
+    assert!(
+        matches!(result, Err(Error::PathCollision { .. })),
+        "{result:?}"
+    );
+    assert!(listing(dest.path()).is_empty());
+}
+
+#[test]
+fn extractor_validate_first_reuses_filter_decisions() {
+    let dest = tempdir().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let filter_calls = Arc::clone(&calls);
+
+    let report = Extractor::new(dest.path())
+        .unwrap()
+        .junk_paths(true)
+        .mode(ExtractionMode::ValidateFirst)
+        .filter(move |_| filter_calls.fetch_add(1, Ordering::SeqCst) == 0)
+        .extract(Cursor::new(colliding_zip()))
+        .unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(report.files_extracted, 1);
+    assert_eq!(read(dest.path(), "x.txt"), b"first");
 }
 
 #[test]
@@ -251,6 +290,25 @@ fn driver_zip_collisions() {
         .extract_zip(ZipAdapter::new(Cursor::new(colliding_zip())).unwrap())
         .unwrap();
     assert_eq!(read(dest.path(), "x.txt"), b"second");
+}
+
+#[test]
+fn driver_validate_first_reuses_filter_decisions() {
+    let dest = tempdir().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let filter_calls = Arc::clone(&calls);
+
+    let report = Driver::new(dest.path())
+        .unwrap()
+        .junk_paths(true)
+        .validation(ValidationMode::ValidateFirst)
+        .filter(move |_| filter_calls.fetch_add(1, Ordering::SeqCst) == 0)
+        .extract_zip(ZipAdapter::new(Cursor::new(colliding_zip())).unwrap())
+        .unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(report.files_extracted, 1);
+    assert_eq!(read(dest.path(), "x.txt"), b"first");
 }
 
 #[cfg(feature = "tar")]
