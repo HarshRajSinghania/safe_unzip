@@ -3,6 +3,7 @@
 //! The driver orchestrates extraction using adapters (format-specific) and
 //! policies (security checks).
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
@@ -177,13 +178,13 @@ impl Driver {
         Ok(self.destination.join(base))
     }
 
-    /// In junk-paths mode with `OverwriteMode::Error`, fail before writing if
-    /// two file entries the filter keeps share a base name.
-    fn check_collisions<'a>(
+    /// In junk-paths mode, validate every kept file's flattened name before
+    /// writing. With `OverwriteMode::Error`, also reject collisions.
+    fn check_flat_names<'a>(
         &self,
         entries: impl IntoIterator<Item = &'a EntryInfo>,
     ) -> Result<Option<Vec<bool>>, Error> {
-        if !self.junk_paths || self.overwrite != OverwriteMode::Error {
+        if !self.junk_paths {
             return Ok(None);
         }
         let mut flat = FlatNames::default();
@@ -199,7 +200,10 @@ impl Driver {
             if !keep || !matches!(info.kind, EntryKind::File) {
                 continue;
             }
-            flat.claim(&base_name(&info.name)?, &info.name)?;
+            let base = base_name(&info.name)?;
+            if self.overwrite == OverwriteMode::Error {
+                flat.claim(&base, &info.name)?;
+            }
         }
         Ok(filter_decisions)
     }
@@ -338,7 +342,7 @@ impl Driver {
         policies: &PolicyChain,
     ) -> Result<Option<Vec<bool>>, Error> {
         let entries = adapter.entries_metadata()?;
-        let filter_decisions = self.check_collisions(&entries)?;
+        let filter_decisions = self.check_flat_names(&entries)?;
         let mut state = ExtractionState::default();
 
         for info in entries {
@@ -514,7 +518,7 @@ impl Driver {
                 }
             }
 
-            let filter_decisions = self.check_collisions(&entries)?;
+            let filter_decisions = self.check_flat_names(&entries)?;
 
             // Extract from cache
             let mut state = ExtractionState::default();
@@ -799,12 +803,10 @@ impl Driver {
 
         let mut state = ExtractionState::default();
         let mut flat = FlatNames::default();
-        let mut entry_index = 0;
-        adapter.for_each(|info, reader| {
+        adapter.for_each_indexed(|entry_index, info, reader| {
             let filter_decision = filter_decisions
                 .as_ref()
-                .map(|decisions| decisions[entry_index]);
-            entry_index += 1;
+                .and_then(|decisions| decisions.get(&entry_index).copied());
             self.extract_7z_entry(
                 info,
                 reader,
@@ -830,9 +832,20 @@ impl Driver {
         &self,
         adapter: &mut crate::adapter::SevenZAdapter,
         policies: &PolicyChain,
-    ) -> Result<Option<Vec<bool>>, Error> {
-        let entries = adapter.entries_metadata();
-        let filter_decisions = self.check_collisions(&entries)?;
+    ) -> Result<Option<HashMap<usize, bool>>, Error> {
+        let indexed_entries = adapter.entries_metadata_indexed();
+        let entries: Vec<_> = indexed_entries
+            .iter()
+            .map(|(_, info)| info.clone())
+            .collect();
+        let filter_decisions = self.check_flat_names(&entries)?;
+        let filter_decisions = filter_decisions.map(|decisions| {
+            indexed_entries
+                .iter()
+                .zip(decisions)
+                .map(|((index, _), keep)| (*index, keep))
+                .collect()
+        });
         let mut state = ExtractionState::default();
         for info in entries {
             policies.check_all(&info, &state)?;

@@ -147,6 +147,24 @@ fn extractor_validate_first_portable_collision_writes_nothing() {
 }
 
 #[test]
+fn extractor_validate_first_rejects_unflattenable_names_before_writing() {
+    let zip = make_zip(&[("good.txt", b"good"), (".", b"bad")]);
+
+    for overwrite in [OverwritePolicy::Skip, OverwritePolicy::Overwrite] {
+        let dest = tempdir().unwrap();
+        let result = Extractor::new(dest.path())
+            .unwrap()
+            .junk_paths(true)
+            .mode(ExtractionMode::ValidateFirst)
+            .overwrite(overwrite)
+            .extract(Cursor::new(zip.clone()));
+
+        assert!(matches!(result, Err(Error::InvalidFilename { .. })));
+        assert!(listing(dest.path()).is_empty(), "{overwrite:?}");
+    }
+}
+
+#[test]
 fn extractor_validate_first_reuses_filter_decisions() {
     let dest = tempdir().unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
@@ -311,6 +329,24 @@ fn driver_validate_first_reuses_filter_decisions() {
     assert_eq!(read(dest.path(), "x.txt"), b"first");
 }
 
+#[test]
+fn driver_validate_first_rejects_unflattenable_names_before_writing() {
+    let zip = make_zip(&[("good.txt", b"good"), (".", b"bad")]);
+
+    for overwrite in [OverwriteMode::Skip, OverwriteMode::Overwrite] {
+        let dest = tempdir().unwrap();
+        let result = Driver::new(dest.path())
+            .unwrap()
+            .junk_paths(true)
+            .validation(ValidationMode::ValidateFirst)
+            .overwrite(overwrite)
+            .extract_zip(ZipAdapter::new(Cursor::new(zip.clone())).unwrap());
+
+        assert!(matches!(result, Err(Error::InvalidFilename { .. })));
+        assert!(listing(dest.path()).is_empty(), "{overwrite:?}");
+    }
+}
+
 #[cfg(feature = "tar")]
 #[test]
 fn driver_tar_flattens() {
@@ -353,6 +389,30 @@ fn driver_7z_flattens() {
             .unwrap();
         assert_eq!(listing(dest.path()), ["a.txt", "b.txt"], "{validation:?}");
     }
+}
+
+#[cfg(feature = "sevenz")]
+#[test]
+fn driver_7z_validate_first_matches_cached_filters_by_entry_identity() {
+    // basic.7z header order is a.txt, dir/, dir/b.txt. sevenz-rust2 decodes
+    // stream entries first and reports the empty directory afterward.
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/7z/basic.7z");
+    let dest = tempdir().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let filter_calls = Arc::clone(&calls);
+
+    let report = Driver::new(dest.path())
+        .unwrap()
+        .junk_paths(true)
+        .validation(ValidationMode::ValidateFirst)
+        .filter(move |_| filter_calls.fetch_add(1, Ordering::SeqCst) == 2)
+        .extract_7z_file(&fixture)
+        .unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    assert_eq!(report.files_extracted, 1);
+    assert_eq!(listing(dest.path()), ["b.txt"]);
+    assert_eq!(read(dest.path(), "b.txt"), b"beta");
 }
 
 #[cfg(feature = "async")]

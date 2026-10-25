@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use unicode_casefold::UnicodeCaseFold;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::error::Error;
@@ -51,8 +52,7 @@ impl FlatNames {
 fn collision_key(base: &Path) -> String {
     let name = base.to_string_lossy();
     name.trim_end_matches([' ', '.'])
-        .chars()
-        .flat_map(char::to_lowercase)
+        .case_fold()
         .nfc()
         .collect()
 }
@@ -111,6 +111,13 @@ mod tests {
             .unwrap();
         assert!(matches!(
             flat.claim(Path::new("cafe\u{301}.txt"), "b/cafe\u{301}.txt"),
+            Err(Error::PathCollision { .. })
+        ));
+
+        let mut flat = FlatNames::default();
+        flat.claim(Path::new("σ.txt"), "a/σ.txt").unwrap();
+        assert!(matches!(
+            flat.claim(Path::new("ς.txt"), "b/ς.txt"),
             Err(Error::PathCollision { .. })
         ));
     }

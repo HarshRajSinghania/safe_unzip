@@ -304,7 +304,7 @@ All security checks (filename rules, path traversal, depth limit) and filters (`
 
 When two entries share a base name (`a/x.txt`, `b/x.txt`), the overwrite policy decides:
 
-Names are compared case-insensitively after Unicode normalization so collisions are detected consistently before writing on macOS, Windows, and Linux.
+Names are compared using Unicode case folding and normalization so collisions are detected consistently before writing on macOS, Windows, and Linux.
 
 | Policy | Result |
 |--------|--------|
@@ -677,7 +677,7 @@ This is intentional—encryption handling is outside our security scope. Passwor
 ### Extraction Behavior
 
 - **Partial state in Streaming mode** — If extraction fails mid-way, files extracted before the failing entry remain on disk (the failing file itself is removed). Use `ExtractionMode::ValidateFirst` to validate, including CRC32, before writing.
-- **Filters not applied during validation** — In `ValidateFirst` mode, limits are checked against ALL entries. Filtered entries still count toward limits. This is conservative: validation may reject archives that would succeed with filtering.
+- **Filters normally aren't applied during validation** — In `ValidateFirst` mode, limits are checked against ALL entries. Filtered entries still count toward limits. Junk-path output-name validation is the exception: filters are evaluated once during preflight and those decisions are reused during extraction. This is conservative: validation may reject archives that would succeed with filtering.
 
 ### Security Scope
 

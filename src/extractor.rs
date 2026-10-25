@@ -644,9 +644,9 @@ impl Extractor {
     /// the declared sizes, so the integrity pass cannot be used as a bomb.
     ///
     /// **Note:** Filter callbacks are normally not applied during validation.
-    /// Junk-paths collision detection with the `Error` overwrite policy is the
-    /// exception: it evaluates each filter once and returns the cached decisions
-    /// for reuse during extraction. In either case:
+    /// Junk-paths output-name validation is the exception: it evaluates each
+    /// filter once and returns the cached decisions for reuse during extraction.
+    /// In either case:
     /// - File count/size limits are checked against ALL entries
     /// - Extraction may skip entries the filter rejects
     /// - This is conservative: validation may reject archives that would succeed with filtering
@@ -660,9 +660,7 @@ impl Extractor {
         let mut file_count: usize = 0;
 
         let mut flat = FlatNames::default();
-        let cache_filter = self.junk_paths
-            && matches!(self.overwrite, OverwritePolicy::Error)
-            && self.filter.is_some();
+        let cache_filter = self.junk_paths && self.filter.is_some();
         let mut filter_decisions = cache_filter.then(|| Vec::with_capacity(archive.len()));
 
         for i in 0..archive.len() {
@@ -729,14 +727,13 @@ impl Extractor {
                 true
             };
 
-            // 5. Junk-paths collisions, among entries the filter keeps
-            if self.junk_paths
-                && matches!(self.overwrite, OverwritePolicy::Error)
-                && !entry.is_dir()
-                && !entry.is_symlink()
-                && keep
-            {
-                flat.claim(&base_name(&name)?, &name)?;
+            // 5. Validate flattened output names among entries the filter keeps.
+            // Collision rejection applies only to the Error overwrite policy.
+            if self.junk_paths && !entry.is_dir() && !entry.is_symlink() && keep {
+                let base = base_name(&name)?;
+                if matches!(self.overwrite, OverwritePolicy::Error) {
+                    flat.claim(&base, &name)?;
+                }
             }
 
             // Accumulate totals (skip symlinks and dirs)

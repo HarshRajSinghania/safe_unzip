@@ -17,9 +17,10 @@ All notable changes to this project will be documented in this file.
     collisions follow the overwrite policy; with `Error` (the default) the new
     `Error::PathCollision { entry, previous, path }` names both entries
     (Python: `AlreadyExistsError`), and `ValidateFirst` reports it before
-    writing. Collision checks use portable case-insensitive, Unicode-normalized
-    name comparison, and validation-time filter decisions are reused during
-    extraction.
+    writing. Collision checks use portable Unicode case-folded and normalized
+    name comparison. `ValidateFirst` validates every flattened output name,
+    and validation-time filter decisions are reused by stable entry identity
+    during extraction.
 
 ### Fixed
 
