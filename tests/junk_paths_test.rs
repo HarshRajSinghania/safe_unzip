@@ -56,6 +56,16 @@ fn colliding_zip() -> Vec<u8> {
     make_zip(&[("a/x.txt", b"first"), ("b/x.txt", b"second")])
 }
 
+fn symlink_then_file_zip() -> Vec<u8> {
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let symlink: FileOptions<()> = FileOptions::default();
+    zip.add_symlink("link", "target", symlink).unwrap();
+    let file: FileOptions<()> = FileOptions::default().unix_permissions(0o100644);
+    zip.start_file("good.txt", file).unwrap();
+    zip.write_all(b"good").unwrap();
+    zip.finish().unwrap().into_inner()
+}
+
 // ============================================================================
 // Extractor
 // ============================================================================
@@ -181,6 +191,28 @@ fn extractor_validate_first_reuses_filter_decisions() {
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(report.files_extracted, 1);
     assert_eq!(read(dest.path(), "x.txt"), b"first");
+}
+
+#[test]
+fn extractor_junk_paths_filter_skips_symlinks_consistently() {
+    for mode in [ExtractionMode::Streaming, ExtractionMode::ValidateFirst] {
+        let dest = tempdir().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let filter_calls = Arc::clone(&calls);
+
+        let report = Extractor::new(dest.path())
+            .unwrap()
+            .junk_paths(true)
+            .mode(mode)
+            .filter(move |_| filter_calls.fetch_add(1, Ordering::SeqCst) == 0)
+            .extract(Cursor::new(symlink_then_file_zip()))
+            .unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "{mode:?}");
+        assert_eq!(report.files_extracted, 1, "{mode:?}");
+        assert_eq!(read(dest.path(), "good.txt"), b"good", "{mode:?}");
+        assert!(!dest.path().join("link").exists(), "{mode:?}");
+    }
 }
 
 #[test]

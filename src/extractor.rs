@@ -717,14 +717,20 @@ impl Extractor {
             }
 
             let keep = if let Some(ref mut decisions) = filter_decisions {
-                let info = EntryInfo {
-                    name: &name,
-                    size: entry.size(),
-                    compressed_size: entry.compressed_size(),
-                    is_dir: entry.is_dir(),
-                    is_symlink: entry.is_symlink(),
+                // Extraction skips symlinks before reaching the filter. Keep a
+                // placeholder so cached decisions still align by ZIP index.
+                let keep = if entry.is_symlink() {
+                    false
+                } else {
+                    let info = EntryInfo {
+                        name: &name,
+                        size: entry.size(),
+                        compressed_size: entry.compressed_size(),
+                        is_dir: entry.is_dir(),
+                        is_symlink: false,
+                    };
+                    self.filter.as_ref().is_none_or(|filter| filter(&info))
                 };
-                let keep = self.filter.as_ref().is_none_or(|filter| filter(&info));
                 decisions.push(keep);
                 keep
             } else {

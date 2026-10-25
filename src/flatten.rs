@@ -52,6 +52,7 @@ impl FlatNames {
 fn collision_key(base: &Path) -> String {
     let name = base.to_string_lossy();
     name.trim_end_matches([' ', '.'])
+        .nfd()
         .case_fold()
         .nfc()
         .collect()
@@ -118,6 +119,20 @@ mod tests {
         flat.claim(Path::new("σ.txt"), "a/σ.txt").unwrap();
         assert!(matches!(
             flat.claim(Path::new("ς.txt"), "b/ς.txt"),
+            Err(Error::PathCollision { .. })
+        ));
+
+        let mut flat = FlatNames::default();
+        flat.claim(
+            Path::new("α\u{0345}\u{0301}.txt"),
+            "a/α\u{0345}\u{0301}.txt",
+        )
+        .unwrap();
+        assert!(matches!(
+            flat.claim(
+                Path::new("α\u{0301}\u{0345}.txt"),
+                "b/α\u{0301}\u{0345}.txt"
+            ),
             Err(Error::PathCollision { .. })
         ));
     }
