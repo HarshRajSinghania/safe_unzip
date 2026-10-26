@@ -1,12 +1,13 @@
 [package]
 name = "safe_unzip"
-version = "0.1.6"
+version = "0.2.0"
 edition = "2021"
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/tenuo-ai/safe_unzip"
 homepage = "https://tenuo.dev"
 authors = ["Niki A. <dev@tenuo.dev>"]
-description = "Secure zip extraction. Prevents Zip Slip and Zip Bombs."
+description = "Secure archive extraction for ZIP, TAR, and 7z with traversal and resource-limit protection."
 keywords = ["zip", "security", "archive", "extraction", "safe"]
 categories = ["filesystem", "compression"]
 
@@ -31,7 +32,7 @@ clap = { version = "4", features = ["derive"], optional = true }
 clap_complete = { version = "4", optional = true }
 # Use minimal zip features to avoid heavy compression dependencies
 zip = { version = "9.1", default-features = false, features = ["deflate", "time"] }
-tar = { version = "0.4", optional = true }
+tar = { version = "0.4.46", optional = true }
 flate2 = { version = "1", optional = true }  # For .tar.gz support
 glob-match = "0.2"  # For include/exclude patterns
 unicode-normalization = "0.1"

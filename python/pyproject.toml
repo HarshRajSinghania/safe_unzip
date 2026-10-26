@@ -4,9 +4,10 @@ build-backend = "maturin"
 
 [project]
 name = "safe-unzip"
-version = "0.1.6"
-description = "Secure zip extraction. Prevents Zip Slip and Zip Bombs."
-license = {text = "MIT OR Apache-2.0"}
+version = "0.2.0"
+description = "Secure archive extraction for ZIP, TAR, and 7z with traversal and resource-limit protection."
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
 requires-python = ">=3.8"
 authors = [
     {name = "Niki A.", email = "dev@tenuo.dev"}
@@ -35,4 +36,3 @@ Repository = "https://github.com/tenuo-ai/safe_unzip"
 python-source = "python"
 module-name = "safe_unzip._safe_unzip"
 features = ["pyo3/extension-module"]
-

@@ -4,28 +4,25 @@ Secure archive extraction. Supports **ZIP** (core), **TAR**, and **7z** (optiona
 
 ## The Problem
 
-Zip files can contain malicious paths that escape the extraction directory:
+Archive formats can contain malicious paths, links, misleading sizes, and highly
+compressed data. Safe extraction therefore requires more than writing each entry
+under a destination directory:
 
 ```python
-import zipfile
-zipfile.ZipFile("evil.zip").extractall("/var/uploads")
-# Extracts ../../etc/cron.d/pwned → /etc/cron.d/pwned 💀
+from safe_unzip import extract_file
+
+extract_file("/var/uploads", "untrusted.zip")
+# Rejects traversal, unsafe links, invalid names, and quota violations.
 ```
 
-This is [Zip Slip](https://snyk.io/research/zip-slip-vulnerability), and Python's default behavior is still vulnerable.
-
-### "But didn't Python fix this?"
-
-Sort of. Python added warnings and `ZipInfo.filename` sanitization in 2014. In Python 3.12+, there's a `filter` parameter:
-
-```python
-# The "safe" way — but who knows this exists?
-zipfile.ZipFile("evil.zip").extractall("/var/uploads", filter="data")
-```
-
-The problem: **the safe option is opt-in**. The default is still vulnerable. Most developers don't read the docs carefully enough to discover `filter="data"`.
-
-`safe_unzip` makes security the default, not an afterthought.
+Python's [`zipfile`](https://docs.python.org/3/library/zipfile.html#zipfile.ZipFile.extractall)
+sanitizes absolute paths and `..` components during extraction, and Python 3.12
+added extraction filters to
+[`tarfile`](https://docs.python.org/3/library/tarfile.html#extraction-filters).
+Those are useful path-safety measures. `safe_unzip` adds one consistent,
+fail-closed policy across ZIP, TAR, and 7z, including configurable size and file
+count limits, strict declared-size and CRC checks, link handling, filename
+restrictions, and validate-before-write mode.
 
 ## The Solution
 
@@ -50,13 +47,13 @@ extract_file("/var/uploads", "evil.zip")
 
 Because **archive extraction is a security boundary**, and most libraries treat it as a convenience function.
 
-| Library | Default Behavior | Safe Option |
-|---------|------------------|-------------|
-| Python `zipfile` | Vulnerable | `filter="data"` (opt-in, obscure) |
-| Python `tarfile` | Vulnerable | `filter="data"` (opt-in, Python 3.12+) |
-| Rust `zip` | Vulnerable | Manual path validation |
-| Rust `tar` | Vulnerable | Manual path validation |
-| `safe_unzip` | **Safe by default** | N/A — always safe |
+| Library | Built-in path handling | Resource limits and strict validation |
+|---------|------------------------|---------------------------------------|
+| Python `zipfile` | Sanitizes absolute paths and `..` components | Application-defined |
+| Python `tarfile` | Extraction filters (`data` is the default in Python 3.14+) | Application-defined |
+| Rust `zip` | Exposes `enclosed_name`; caller chooses policy | Application-defined |
+| Rust `tar` | Unpacks entries below the destination; caller chooses policy | Application-defined |
+| `safe_unzip` | **One fail-closed policy for ZIP, TAR, and 7z** | **Built-in quotas, integrity checks, and preflight mode** |
 
 If you're extracting untrusted archives, you need a library designed for that threat model.
 
@@ -101,7 +98,7 @@ cargo install safe_unzip --features cli
 **Rust:**
 ```toml
 [dependencies]
-safe_unzip = "0.1"
+safe_unzip = "0.2"
 ```
 
 **Python:**
@@ -111,24 +108,27 @@ pip install safe-unzip
 
 ### Feature Flags
 
+The ZIP, TAR, and async features require Rust 1.88 or newer. The optional 7z
+backend requires Rust 1.93 or newer.
+
 | Feature | Default | Description |
 |---------|---------|-------------|
 | `tar` | ❌ | TAR/TAR.GZ extraction |
 | `async` | ❌ | Tokio-based async API |
-| `sevenz` | ❌ | 7z extraction (heavier deps) |
+| `sevenz` | ❌ | 7z extraction (heavier deps; requires Rust 1.93+) |
 
 ```toml
 # ZIP only (smallest, ~30 deps)
-safe_unzip = "0.1"
+safe_unzip = "0.2"
 
 # With TAR support (~40 deps)
-safe_unzip = { version = "0.1", features = ["tar"] }
+safe_unzip = { version = "0.2", features = ["tar"] }
 
 # With async API
-safe_unzip = { version = "0.1", features = ["async"] }
+safe_unzip = { version = "0.2", features = ["async"] }
 
 # Kitchen sink (~85 deps)
-safe_unzip = { version = "0.1", features = ["tar", "async", "sevenz"] }
+safe_unzip = { version = "0.2", features = ["tar", "async", "sevenz"] }
 ```
 
 > **Note:** Python bindings always include TAR support.
@@ -484,7 +484,7 @@ Enable the `sevenz` feature:
 
 ```toml
 [dependencies]
-safe_unzip = { version = "0.1", features = ["sevenz"] }
+safe_unzip = { version = "0.2", features = ["sevenz"] }
 ```
 
 ```rust
@@ -518,7 +518,7 @@ Enable the `async` feature for tokio-based async extraction:
 
 ```toml
 [dependencies]
-safe_unzip = { version = "0.1", features = ["async"] }
+safe_unzip = { version = "0.2", features = ["async"] }
 ```
 
 ```rust
@@ -685,8 +685,8 @@ These threats are **not fully addressed** (by design or complexity):
 
 | Limitation | Reason |
 |------------|--------|
-| **Case-insensitive collisions** | On Windows/macOS, `File.txt` and `file.txt` map to the same file. We don't track extracted names to detect this. |
-| **Unicode normalization** | `café` (NFC) vs `café` (NFD) appear identical but are different bytes. Full normalization requires ICU. |
+| **Case-insensitive collisions outside junk-path mode** | Junk-path mode detects portable case-folded collisions before writing. Normal hierarchical extraction does not yet track all emitted names, so filesystem-specific aliases may still collide. |
+| **Unicode normalization outside junk-path mode** | Junk-path mode compares Unicode-normalized names. Normal hierarchical extraction relies on the destination filesystem's behavior. |
 | **Concurrent extraction** | If multiple threads/processes extract to the same destination, race conditions can occur. Use file locking or separate destinations. |
 | **Sparse file attacks** | Not applicable to zip format. |
 | **Hard links** | Zip format doesn't support hard links. |
