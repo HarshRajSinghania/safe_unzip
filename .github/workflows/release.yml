@@ -4,9 +4,16 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: Existing version tag to resume (for example, v0.2.0)
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_REF: ${{ inputs.release_ref || github.ref_name }}
 
 jobs:
   validate-release:
@@ -14,9 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
 
       - name: Validate tag, package versions, and changelog
-        run: ./scripts/check-release.sh "${GITHUB_REF_NAME}"
+        run: ./scripts/check-release.sh "${RELEASE_REF}"
 
   # Publish to crates.io
   crates-io:
@@ -25,11 +34,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       
       - name: Publish to crates.io
+        if: github.event_name == 'push'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked
@@ -64,6 +76,8 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -92,6 +106,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
       
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -102,7 +118,11 @@ jobs:
         run: pip install maturin
       
       - name: Build sdist
-        run: cd python && maturin sdist
+        run: |
+          # Cargo adds the root license files to the sdist. Remove the Python
+          # copies in this ephemeral checkout to avoid duplicate archive paths.
+          rm python/LICENSE-MIT python/LICENSE-APACHE
+          cd python && maturin sdist
       
       - name: Upload sdist
         uses: actions/upload-artifact@v4
@@ -145,6 +165,8 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
       
       - name: Download wheels
         uses: actions/download-artifact@v4
@@ -162,7 +184,7 @@ jobs:
       - name: Extract changelog for this version
         id: changelog
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION=${RELEASE_REF#v}
           awk -v version="${VERSION}" '
             $0 == "## [" version "]" || index($0, "## [" version "] - ") == 1 {
               found = 1
@@ -179,6 +201,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_REF }}
           files: |
             dist/*.whl
             dist/*.tar.gz
