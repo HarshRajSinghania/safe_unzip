@@ -266,6 +266,12 @@ impl PyExtractor {
         slf
     }
 
+    /// Set maximum total bytes to extract (exact byte count).
+    fn max_total_bytes(mut slf: PyRefMut<'_, Self>, bytes: u64) -> PyRefMut<'_, Self> {
+        slf.max_total_bytes = bytes;
+        slf
+    }
+
     /// Set maximum number of files to extract.
     fn max_files(mut slf: PyRefMut<'_, Self>, count: usize) -> PyRefMut<'_, Self> {
         slf.max_file_count = count;

@@ -142,11 +142,11 @@ def extract_archive(
     try:
         extractor = Extractor(dest)
         
-        if max_size:
+        if max_size is not None:
             extractor = extractor.max_total_bytes(max_size)
-        if max_files:
+        if max_files is not None:
             extractor = extractor.max_files(max_files)
-        if max_depth:
+        if max_depth is not None:
             extractor = extractor.max_depth(max_depth)
         
         extractor = extractor.overwrite(overwrite)
@@ -250,4 +250,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

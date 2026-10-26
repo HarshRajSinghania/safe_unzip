@@ -104,6 +104,10 @@ class Extractor:
         """Set maximum total bytes to extract (in megabytes)."""
         ...
     
+    def max_total_bytes(self, num_bytes: int) -> "Extractor":
+        """Set maximum total bytes to extract (exact byte count)."""
+        ...
+    
     def max_files(self, count: int) -> "Extractor":
         """Set maximum number of files to extract."""
         ...
@@ -202,6 +206,10 @@ class AsyncExtractor:
     
     def max_total_mb(self, mb: int) -> "AsyncExtractor":
         """Set maximum total bytes to extract (in megabytes)."""
+        ...
+    
+    def max_total_bytes(self, num_bytes: int) -> "AsyncExtractor":
+        """Set maximum total bytes to extract (exact byte count)."""
         ...
     
     def max_files(self, count: int) -> "AsyncExtractor":

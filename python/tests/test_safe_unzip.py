@@ -1026,3 +1026,49 @@ def test_cli_junk_paths(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert [p.name for p in dest.iterdir()] == ["file.txt"]
+
+
+# ============================================================================
+# Byte-precise total limit / CLI --max-size
+# ============================================================================
+
+def test_max_total_bytes(tmp_path):
+    zip_data = create_simple_zip("data.bin", b"x" * 1000)
+
+    (tmp_path / "a").mkdir()
+    with pytest.raises(QuotaError):
+        Extractor(tmp_path / "a").max_total_bytes(999).extract_bytes(zip_data)
+
+    (tmp_path / "b").mkdir()
+    report = Extractor(tmp_path / "b").max_total_bytes(1000).extract_bytes(zip_data)
+    assert report.bytes_written == 1000
+
+
+def _run_cli(*args):
+    import subprocess
+    import sys
+
+    return subprocess.run(
+        [sys.executable, "-m", "safe_unzip", *map(str, args)],
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_cli_max_size(tmp_path):
+    archive = tmp_path / "a.zip"
+    archive.write_bytes(create_simple_zip("data.bin", b"x" * 2048))
+
+    result = _run_cli(archive, "-d", tmp_path / "ok", "--max-size", "10M", "-q")
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "ok" / "data.bin").stat().st_size == 2048
+
+    result = _run_cli(archive, "-d", tmp_path / "small", "--max-size", "1K", "-q")
+    assert result.returncode != 0
+    assert "limit" in result.stderr
+    assert not (tmp_path / "small" / "data.bin").exists()
+
+    result = _run_cli(archive, "-d", tmp_path / "zero", "--max-size", "0", "-q")
+    assert result.returncode != 0
+    assert "limit" in result.stderr
+    assert not (tmp_path / "zero" / "data.bin").exists()
