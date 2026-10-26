@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Python CLI `--max-size`** ([#10](https://github.com/tenuo-ai/safe_unzip/issues/10)):
+  `python -m safe_unzip --max-size ...` failed with `AttributeError`. It now
+  sets the limit in exact bytes.
+
+### Added
+
+- Python: `Extractor.max_total_bytes()` and `AsyncExtractor.max_total_bytes()`
+  for a byte-precise total size limit (alongside `max_total_mb()`).
+
 ## [0.2.0] - 2026-10-25
 
 ### Added
