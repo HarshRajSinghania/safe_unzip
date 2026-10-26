@@ -28,6 +28,8 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - Updated `tar` to 0.4.46 to address GHSA-3pv8-6f4r-ffg2.
+- Restored the advertised Python 3.8 compatibility for type annotations and
+  asynchronous helpers.
 - Updated `zip` to 9.1 to address RUSTSEC-2026-0367,
   RUSTSEC-2026-0368, and RUSTSEC-2026-0369.
 - Updated `tokio` to 1.54.1 to address RUSTSEC-2026-0386.

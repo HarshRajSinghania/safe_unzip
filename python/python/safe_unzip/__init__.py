@@ -40,6 +40,8 @@ Async usage:
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import functools
 from os import PathLike
 from pathlib import Path
 from typing import Union, Literal, Optional, Callable
@@ -81,6 +83,14 @@ _PathType = Union[str, PathLike, Path]
 _OverwritePolicy = Literal["error", "skip", "overwrite"]
 _SymlinkPolicy = Literal["skip", "error"]
 _ExtractionMode = Literal["streaming", "validate_first"]
+
+
+async def _to_thread(func, /, *args, **kwargs):
+    """Run a blocking call in a worker thread on Python 3.8 and newer."""
+    loop = asyncio.get_running_loop()
+    context = contextvars.copy_context()
+    call = functools.partial(context.run, func, *args, **kwargs)
+    return await loop.run_in_executor(None, call)
 
 
 # ============================================================================
@@ -246,27 +256,27 @@ class Extractor:
 
 async def async_extract_file(destination: _PathType, path: _PathType) -> Report:
     """Extract a ZIP file asynchronously with default settings."""
-    return await asyncio.to_thread(extract_file, destination, path)
+    return await _to_thread(extract_file, destination, path)
 
 
 async def async_extract_bytes(destination: _PathType, data: bytes) -> Report:
     """Extract ZIP from bytes asynchronously with default settings."""
-    return await asyncio.to_thread(extract_bytes, destination, data)
+    return await _to_thread(extract_bytes, destination, data)
 
 
 async def async_extract_tar_file(destination: _PathType, path: _PathType) -> Report:
     """Extract a TAR file asynchronously with default settings."""
-    return await asyncio.to_thread(extract_tar_file, destination, path)
+    return await _to_thread(extract_tar_file, destination, path)
 
 
 async def async_extract_tar_gz_file(destination: _PathType, path: _PathType) -> Report:
     """Extract a gzip-compressed TAR file asynchronously with default settings."""
-    return await asyncio.to_thread(extract_tar_gz_file, destination, path)
+    return await _to_thread(extract_tar_gz_file, destination, path)
 
 
 async def async_extract_tar_bytes(destination: _PathType, data: bytes) -> Report:
     """Extract TAR from bytes asynchronously with default settings."""
-    return await asyncio.to_thread(extract_tar_bytes, destination, data)
+    return await _to_thread(extract_tar_bytes, destination, data)
 
 
 # ============================================================================
@@ -275,27 +285,27 @@ async def async_extract_tar_bytes(destination: _PathType, data: bytes) -> Report
 
 async def async_list_zip_entries(path: _PathType) -> list:
     """List entries in a ZIP file asynchronously without extracting."""
-    return await asyncio.to_thread(list_zip_entries, path)
+    return await _to_thread(list_zip_entries, path)
 
 
 async def async_list_zip_bytes(data: bytes) -> list:
     """List entries in ZIP bytes asynchronously without extracting."""
-    return await asyncio.to_thread(list_zip_bytes, data)
+    return await _to_thread(list_zip_bytes, data)
 
 
 async def async_list_tar_entries(path: _PathType) -> list:
     """List entries in a TAR file asynchronously without extracting."""
-    return await asyncio.to_thread(list_tar_entries, path)
+    return await _to_thread(list_tar_entries, path)
 
 
 async def async_list_tar_gz_entries(path: _PathType) -> list:
     """List entries in a gzip-compressed TAR file asynchronously."""
-    return await asyncio.to_thread(list_tar_gz_entries, path)
+    return await _to_thread(list_tar_gz_entries, path)
 
 
 async def async_list_tar_bytes(data: bytes) -> list:
     """List entries in TAR bytes asynchronously without extracting."""
-    return await asyncio.to_thread(list_tar_bytes, data)
+    return await _to_thread(list_tar_bytes, data)
 
 
 # ============================================================================
@@ -308,12 +318,12 @@ async def async_verify_file(path: _PathType) -> "VerifyReport":
     Reads and decompresses all file entries to check CRC32.
     Returns VerifyReport on success, raises exception on CRC failure.
     """
-    return await asyncio.to_thread(verify_file, path)
+    return await _to_thread(verify_file, path)
 
 
 async def async_verify_bytes(data: bytes) -> "VerifyReport":
     """Verify archive integrity from bytes asynchronously."""
-    return await asyncio.to_thread(verify_bytes, data)
+    return await _to_thread(verify_bytes, data)
 
 
 # ============================================================================
@@ -416,28 +426,28 @@ class AsyncExtractor:
     # ZIP extraction
     async def extract_file(self, path: _PathType) -> Report:
         """Extract a ZIP file asynchronously."""
-        return await asyncio.to_thread(self._extractor.extract_file, path)
+        return await _to_thread(self._extractor.extract_file, path)
     
     async def extract_bytes(self, data: bytes) -> Report:
         """Extract ZIP from bytes asynchronously."""
-        return await asyncio.to_thread(self._extractor.extract_bytes, data)
+        return await _to_thread(self._extractor.extract_bytes, data)
     
     # TAR extraction
     async def extract_tar_file(self, path: _PathType) -> Report:
         """Extract a TAR file asynchronously."""
-        return await asyncio.to_thread(self._extractor.extract_tar_file, path)
+        return await _to_thread(self._extractor.extract_tar_file, path)
     
     async def extract_tar_gz_file(self, path: _PathType) -> Report:
         """Extract a gzip-compressed TAR file (.tar.gz, .tgz) asynchronously."""
-        return await asyncio.to_thread(self._extractor.extract_tar_gz_file, path)
+        return await _to_thread(self._extractor.extract_tar_gz_file, path)
     
     async def extract_tar_bytes(self, data: bytes) -> Report:
         """Extract TAR from bytes asynchronously."""
-        return await asyncio.to_thread(self._extractor.extract_tar_bytes, data)
+        return await _to_thread(self._extractor.extract_tar_bytes, data)
     
     async def extract_tar_gz_bytes(self, data: bytes) -> Report:
         """Extract gzip-compressed TAR from bytes asynchronously."""
-        return await asyncio.to_thread(self._extractor.extract_tar_gz_bytes, data)
+        return await _to_thread(self._extractor.extract_tar_gz_bytes, data)
 
 
 __all__ = [
