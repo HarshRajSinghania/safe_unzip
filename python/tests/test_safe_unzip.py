@@ -1067,3 +1067,8 @@ def test_cli_max_size(tmp_path):
     assert result.returncode != 0
     assert "limit" in result.stderr
     assert not (tmp_path / "small" / "data.bin").exists()
+
+    result = _run_cli(archive, "-d", tmp_path / "zero", "--max-size", "0", "-q")
+    assert result.returncode != 0
+    assert "limit" in result.stderr
+    assert not (tmp_path / "zero" / "data.bin").exists()
